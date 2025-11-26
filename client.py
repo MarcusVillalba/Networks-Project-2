@@ -50,7 +50,7 @@ class LobbyClient:
             elif text.startswith("LOBBY_STATE"):
                 # Format: LOBBY_STATE;pid,color,ready,lx,ly;pid,color,ready,lx,ly;...
 
-                entries = text.split(";")[1:]  # skip LOBBY_STATE prefix
+                entries = text.split(";")[1:]
 
                 new_player_states = {}
                 new_color_map = {}
@@ -97,7 +97,6 @@ class LobbyClient:
                     if pid == self.player_id:
                         self.player_color = color_str
 
-                # ---- Replace old state atomically ----
                 self.color_map = new_color_map
                 self.player_states = new_player_states
                 self.lobby_players = new_lobby_list
@@ -107,7 +106,6 @@ class LobbyClient:
             if text == "COUNTDOWN_CANCEL":
                 # stop showing countdown
                 self.countdown_value = None
-                # optional: log a message
                 self.message_log.append("Countdown canceled")
                 continue
 
@@ -116,7 +114,7 @@ class LobbyClient:
             elif text.startswith("COUNTDOWN"):
                 t = text.split(",")[1]
                 try:
-                    self.countdown_value = int(t)    # <<< STORE VALUE FOR UI
+                    self.countdown_value = int(t)
                 except:
                     pass
                 self.message_log.append(f"Game starting in {t}")
@@ -296,7 +294,7 @@ while running:
         draw_text(WIN, f"Game starting in: {client.countdown_value}",
                 300, 60, FONT, (255, 255, 0))
 
-    # Instructions
+    # Ready instruction
     draw_text(WIN, "Press SPACE to toggle ready", 20, 350, SMALL)
 
     # Most recent message
