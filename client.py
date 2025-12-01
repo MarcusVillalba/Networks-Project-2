@@ -4,7 +4,7 @@ import threading
 import time
 import os
 
-SERVER_IP = "192.168.1.166"
+SERVER_IP = ""
 SERVER_PORT = 9000
 
 # ------------------------------------------------------------
