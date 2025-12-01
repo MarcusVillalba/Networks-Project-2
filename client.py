@@ -4,7 +4,7 @@ import threading
 import time
 import os
 
-SERVER_IP = "192.168.1.177"
+SERVER_IP = "192.168.1.166"
 SERVER_PORT = 9000
 
 # ------------------------------------------------------------
@@ -41,12 +41,12 @@ class LobbyClient:
 
             text = data.decode("utf-8")
 
-            # FORMAT: ASSIGN_ID,<id>
+            # assigns a new player an id (occurs when a new player joins in handle_join)
             if text.startswith("ASSIGN_ID"):
                 self.player_id = int(text.split(",")[1])
                 self.message_log.append(f"Assigned ID = {self.player_id}")
 
-            # FORMAT: LOBBY_STATE,<id1>-<ready1>,<id2>-<ready2>,...
+            # Reassign all lobby values to ensure all players are up-to-date (occurs when server calls format_lobby_state)
             elif text.startswith("LOBBY_STATE"):
                 # Format: LOBBY_STATE;pid,color,ready,lx,ly;pid,color,ready,lx,ly;...
 
@@ -109,8 +109,7 @@ class LobbyClient:
                 self.message_log.append("Countdown canceled")
                 continue
 
-
-            # FORMAT: COUNTDOWN,<seconds>
+            # if countdown isn't cancelled, continue displaying the countdown
             elif text.startswith("COUNTDOWN"):
                 t = text.split(",")[1]
                 try:
@@ -118,9 +117,6 @@ class LobbyClient:
                 except:
                     pass
                 self.message_log.append(f"Game starting in {t}")
-
-            elif text.startswith("COUNTDOWN_CANCEL"):
-                self.countdown_value = None
 
             else:
                 self.message_log.append(f"Unknown msg: {text}")
@@ -155,7 +151,7 @@ class LobbyClient:
 # ------------------------------------------------------------
 pygame.init()
 WIN = pygame.display.set_mode((600, 400))
-pygame.display.set_caption("Lobby Frontend")
+pygame.display.set_caption("Lobby")
 FONT = pygame.font.SysFont("Arial", 24)
 SMALL = pygame.font.SysFont("Arial", 16)
 AVAILABLE_COLORS = ["pink", "red", "yellow", "green", "blue", "purple"]
@@ -171,12 +167,12 @@ for filename in os.listdir(color_folder):
             os.path.join(color_folder, filename)
         ).convert_alpha()
 
-
 client = LobbyClient()
 
 clock = pygame.time.Clock()
 running = True
 
+# move to the next color, players cannot share a color
 def cycle_color(direction, current_color, all_colors, used_colors):
     n = len(all_colors)
     i = all_colors.index(current_color)
@@ -189,7 +185,7 @@ def cycle_color(direction, current_color, all_colors, used_colors):
         if i == start:
             return current_color
 
-
+# put text in the pygame window
 def draw_text(surface, text, x, y, font, color=(255,255,255)):
     img = font.render(text, True, color)
     surface.blit(img, (x, y))
@@ -232,10 +228,10 @@ while running:
                     # determine current known state (fallback 0)
                     own = next((r for (pid, r) in client.lobby_players if pid == client.player_id), 0)
 
-                    # optimistic toggle locally so UI updates immediately
+                    # locally toggle client's own ready status
                     new_local = 0 if own == 1 else 1
 
-                    # send the appropriate packet including our pid
+                    # then send the appropriate packet including our pid
                     if new_local == 1:
                         client.send_ready()
                     else:
@@ -298,8 +294,8 @@ while running:
     draw_text(WIN, "Press SPACE to toggle ready", 20, 350, SMALL)
 
     # Most recent message
-    if client.message_log:
-        draw_text(WIN, f"Last message: {client.message_log[-1]}", 20, 300, SMALL)
+    #if client.message_log:
+    #    draw_text(WIN, f"Last message: {client.message_log[-1]}", 20, 300, SMALL)
 
     pygame.display.flip()
 
@@ -309,6 +305,7 @@ while running:
             client.sock.sendto(msg, (SERVER_IP, SERVER_PORT))
         running = False
 
+    # temporarily send a heartbeat so the server knows not to time this client out
     if time.time() - client.last_heartbeat > 0.5:
         msg = f"HEARTBEAT,{client.player_id}".encode("utf-8")
         client.sock.sendto(msg, (SERVER_IP, SERVER_PORT))

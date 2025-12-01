@@ -1,9 +1,7 @@
-# server_lobby.py (revised, hardened)
 import socket
 import threading
 import time
 
-DISCOVERY_PORT = 9001    # clients listen here for the server broadcast
 GAME_PORT = 9000         # lobby/game UDP port clients JOIN on
 BROADCAST_INTERVAL = 1.0
 TICK_RATE = 10
@@ -15,22 +13,9 @@ SPACING_X = 80
 MAX_PLAYERS = 4
 PLAYER_COLORS = ["pink", "red", "yellow", "green", "blue", "purple"]
 
-def get_local_ip():
-    """Return a non-loopback local IP address (best-effort)."""
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-    except Exception:
-        ip = "127.0.0.1"
-    finally:
-        s.close()
-    return ip
-
 class LobbyServer:
-    def __init__(self, game_port=GAME_PORT, discovery_port=DISCOVERY_PORT):
+    def __init__(self, game_port=GAME_PORT):
         self.game_port = game_port
-        self.discovery_port = discovery_port
 
         # Main UDP socket for lobby messages (JOIN, READY, SET_COLOR)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -39,38 +24,29 @@ class LobbyServer:
 
         # players: pid(str) -> { ready, color, lobby_x, lobby_y, addr }
         self.players = {}
-        self.addr_to_pid = {}   # maps (ip,port) -> pid (string)
-        self.next_pid = 1000
+        self.addr_to_pid = {}   # maps (ip,port) -> pid (string)d
+        self.next_pid = 1
         self.last_heard = {}
         self.lobby_open = True
         self.game_started = False
 
         self.countdown_active = False
-        self.countdown_time = 5  # seconds
+        self.countdown_time = 5
         self.countdown_remaining = None
         self.last_countdown_int = None
 
         self.running = True
 
         # Start broadcaster and main tick loop
-        self.local_ip = get_local_ip()
         threading.Thread(target=self.discovery_broadcast_loop, daemon=True).start()
 
-        print(f"[Server] Listening on 0.0.0.0:{self.game_port} (local IP {self.local_ip})")
-        print(f"[Server] Discovery broadcasting on 255.255.255.255:{self.discovery_port}")
+        print(f"[Server] Listening on 0.0.0.0:{self.game_port}")
 
     def discovery_broadcast_loop(self):
         b = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         b.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        while self.running:
-            try:
-                msg = f"SERVER_BROADCAST,{self.local_ip},{self.game_port}".encode("utf-8")
-                b.sendto(msg, ("255.255.255.255", self.discovery_port))
-            except Exception as e:
-                # keep trying, don't crash
-                print("[Discovery] broadcast error (ignored):", e)
-            time.sleep(BROADCAST_INTERVAL)
 
+    # assign lobby positions when a new player joins or leaves
     def assign_lobby_positions(self):
         pids = list(self.players.keys())
         for i, pid in enumerate(pids):
@@ -79,6 +55,7 @@ class LobbyServer:
                 self.players[pid]["lobby_x"] = BASE_LOBBY_X + i * SPACING_X
                 self.players[pid]["lobby_y"] = BASE_LOBBY_Y
 
+    # when a player joins, assign default values (pid, x and y, color)
     def handle_join(self, addr):
         if len(self.players) >= MAX_PLAYERS:
             try:
@@ -126,7 +103,7 @@ class LobbyServer:
         except Exception as e:
             print("[Server] Failed to send ASSIGN_ID:", e)
 
-
+    # no two players can have the same color
     def handle_set_color(self, pid, color):
         if pid not in self.players:
             return
@@ -136,18 +113,14 @@ class LobbyServer:
             return  # ignore request
         self.players[pid]["color"] = color
 
+    # flip the ready value for the player
     def handle_ready_toggle(self, pid):
         if pid in self.players:
             self.players[pid]["ready"] = not self.players[pid]["ready"]
             print(f"[Server] Player {pid} ready toggled → {self.players[pid]['ready']}")
 
+    # receive data from the clients
     def receive_packets(self):
-        """
-        Robust receive loop that:
-        - separates recvfrom errors from per-packet processing
-        - maps addrs to pids via self.addr_to_pid
-        - removes clients when we can identify a reset (10054)
-        """
         while True:
             # --- Receive phase ---
             try:
@@ -239,6 +212,7 @@ class LobbyServer:
                 print("[Server] receive error (ignored):", e)
                 continue
 
+    # if a client has left, remove their data, reassign lobby positions,
     def remove_client(self, pid):
         # fully remove the player from all tracking structures
         if pid in self.players:
@@ -271,7 +245,6 @@ class LobbyServer:
 
         print(f"[Server] Removed player {pid} and cleaned state")
 
-
     def timeout_check(self):
         now = time.time()
         for pid, last in list(self.last_heard.items()):
@@ -279,7 +252,7 @@ class LobbyServer:
                 print(f"[Server] Timeout: removing {pid}")
                 self.remove_client(pid)
 
-
+    # Gather all player data at this moment
     def format_lobby_state(self):
         chunks = ["LOBBY_STATE"]
         # iterate over a stable snapshot
@@ -291,6 +264,7 @@ class LobbyServer:
             chunks.append(f"{pid},{color},{ready},{lx},{ly}")
         return ";".join(chunks).encode("utf-8")
 
+    # Broadcast all current player data
     def broadcast_lobby_state(self):
         msg = self.format_lobby_state()
         for pid, p in list(self.players.items()):
@@ -341,21 +315,21 @@ class LobbyServer:
                 self.broadcast_lobby_state()
                 return
 
-            # send countdown only when integer value changes
+            # if all players are still ready, send countdown only when integer value changes
             current_int = int(self.countdown_remaining)
             if current_int != self.last_countdown_int:
                 self.last_countdown_int = current_int
                 print(f"[Server] Countdown: {current_int}")
                 self.broadcast_countdown()
 
-            # decrement timer
+            # decrement the countdown
             self.countdown_remaining -= DT
 
             if self.countdown_remaining <= 0:
                 self.countdown_active = False
                 self.game_started = True
                 print("[Server] Countdown finished. Game starting now.")
-                # NOTE: game initialization would go here
+                # note: game initialization would go here
                 return
 
         # Normal lobby state updates
@@ -363,6 +337,7 @@ class LobbyServer:
         self.check_start_condition()
         self.timeout_check()
 
+    # the main running loop schedules each tick and runs them
     def run(self):
         next_tick = time.time()
         while True:
